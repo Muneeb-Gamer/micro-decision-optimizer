@@ -1,20 +1,20 @@
-# AI Micro-Decision Optimizer — Streamlit Cloud Safe Version
-# ---------------------------------------------------------
+# AI Micro-Decision Optimizer — Stable Streamlit Version
+# -----------------------------------------------------
 # Features:
 # - Daily energy prediction (1–10)
-# - Multi-factor inputs: sleep, coffee, sugar, screen time, steps, water, stress, mood, previous day energy
-# - Baseline fallback if scikit-learn not available
-# - Related questions engine
+# - Inputs: sleep, coffee, sugar, screen time, steps, water, stress, mood, prev_day_energy
+# - Sklearn fallback if unavailable
 # - Recommendations
 # - What-if simulation
-# - Trend charts (energy over time, factor importance)
+# - Energy trends
+# - Related questions suggestions
 
 import os
 import datetime as dt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from typing import List, Dict, Any, Tuple
+from typing import Dict, Any, List
 
 # -----------------------------
 # Check for scikit-learn
@@ -33,23 +33,16 @@ except ModuleNotFoundError:
 # -----------------------------
 DATA_PATH = os.environ.get("MDO_DATA_PATH", "user_data.csv")
 FEATURES = [
-    "sleep_hours",
-    "sleep_quality",
-    "coffee_cups",
-    "sugar_servings",
-    "screen_time_hours",
-    "steps",
-    "water_liters",
-    "stress_level",
-    "mood",
-    "prev_day_energy",
+    "sleep_hours", "sleep_quality", "coffee_cups", "sugar_servings",
+    "screen_time_hours", "steps", "water_liters", "stress_level",
+    "mood", "prev_day_energy"
 ]
 TARGET = "energy_today"
 
 # -----------------------------
-# Utility functions
+# CSV utilities
 # -----------------------------
-def ensure_csv(path: str) -> None:
+def ensure_csv(path: str):
     if not os.path.exists(path):
         df = pd.DataFrame(columns=["date"] + FEATURES + [TARGET])
         df.to_csv(path, index=False)
@@ -65,7 +58,7 @@ def load_data(path: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
-def append_row(path: str, row: Dict[str, Any]) -> None:
+def append_row(path: str, row: Dict[str, Any]):
     df = load_data(path)
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.to_csv(path, index=False)
@@ -73,7 +66,7 @@ def append_row(path: str, row: Dict[str, Any]) -> None:
 # -----------------------------
 # Prediction functions
 # -----------------------------
-def train_model(df: pd.DataFrame) -> Tuple[Any, Dict[str, float]]:
+def train_model(df: pd.DataFrame):
     if not sklearn_available:
         return None, {f: 0.0 for f in FEATURES}
     train_df = df.dropna(subset=[TARGET]).copy()
@@ -88,22 +81,16 @@ def train_model(df: pd.DataFrame) -> Tuple[Any, Dict[str, float]]:
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
     st.sidebar.success(f"Model trained on {len(train_df)} days — R²: {r2:.2f}, MAE: {mae:.2f}")
-    importances = {}
-    if hasattr(model, "feature_importances_"):
-        for i, f in enumerate(FEATURES):
-            importances[f] = float(model.feature_importances_[i])
+    importances = {f: float(v) for f, v in zip(FEATURES, model.feature_importances_)}
     return model, importances
 
 def baseline_predict(row: Dict[str, Any]) -> float:
     energy = row.get("prev_day_energy", 6.0)
-    sleep = row.get("sleep_hours", 7.0)
-    energy += (sleep - 7.0) * 0.4
+    energy += (row.get("sleep_hours", 7.0) - 7.0) * 0.4
     coffee = row.get("coffee_cups", 1.0)
-    if coffee > 2:
-        energy -= 0.3 * (coffee - 2)
+    energy -= max(0, coffee - 2) * 0.3
     sugar = row.get("sugar_servings", 1.0)
-    if sugar > 2:
-        energy -= 0.2 * (sugar - 2)
+    energy -= max(0, sugar - 2) * 0.2
     stress = row.get("stress_level", 5.0)
     energy -= max(0, stress - 5) * 0.2
     steps = row.get("steps", 5000)
@@ -116,13 +103,13 @@ def baseline_predict(row: Dict[str, Any]) -> float:
     energy += (mood - 6) * 0.3
     return float(np.clip(energy, 1.0, 10.0))
 
-def simulate_prediction(test_row: Dict[str, Any], df: pd.DataFrame) -> float:
+def simulate_prediction(row: Dict[str, Any], df: pd.DataFrame) -> float:
     if sklearn_available:
         model, _ = train_model(df)
-        if model is not None:
-            X = pd.DataFrame([test_row])[FEATURES].fillna(0)
+        if model:
+            X = pd.DataFrame([row])[FEATURES].fillna(0)
             return float(np.clip(model.predict(X)[0], 1.0, 10.0))
-    return baseline_predict(test_row)
+    return baseline_predict(row)
 
 # -----------------------------
 # Recommendations
@@ -130,23 +117,23 @@ def simulate_prediction(test_row: Dict[str, Any], df: pd.DataFrame) -> float:
 def make_recommendations(row: Dict[str, Any], pred: float) -> List[str]:
     recs = []
     if row.get("sleep_hours", 7.0) < 6.5:
-        recs.append("Add 30–60 mins of sleep tonight; short sleep reduces energy.")
+        recs.append("Add 30–60 mins of sleep tonight.")
     if row.get("coffee_cups", 1.0) >= 3:
-        recs.append("Reduce caffeine after 2 PM; too much can hurt sleep quality.")
+        recs.append("Reduce caffeine after 2 PM.")
     if row.get("sugar_servings", 1.0) >= 3:
-        recs.append("Cut back on sugary snacks; energy spikes then dips.")
+        recs.append("Cut back on sugary snacks.")
     if row.get("screen_time_hours", 4.0) > 6:
-        recs.append("Take short off-screen breaks every 60–90 mins.")
+        recs.append("Take short off-screen breaks.")
     if row.get("steps", 5000) < 4000:
-        recs.append("A 10–15 min walk can boost alertness.")
+        recs.append("Go for a 10–15 min walk.")
     if row.get("water_liters", 2.0) < 1.5:
-        recs.append("Increase hydration; mild dehydration reduces energy.")
+        recs.append("Drink more water.")
     if row.get("stress_level", 5.0) >= 7:
-        recs.append("Try a 3–5 min breathing break; high stress reduces energy.")
+        recs.append("Try a 3–5 min breathing break.")
     if row.get("mood", 6.0) <= 4:
-        recs.append("Lift your mood: music, sunlight, or a short chat.")
+        recs.append("Lift your mood: music, sunlight, or chat.")
     if pred < 6.0:
-        recs.append("Plan deep-focus work early; energy may dip later.")
+        recs.append("Plan deep-focus work early today.")
     if not recs:
         recs.append("Nice balance today—keep routines steady.")
     return recs[:5]
@@ -155,8 +142,8 @@ def make_recommendations(row: Dict[str, Any], pred: float) -> List[str]:
 # Streamlit UI
 # -----------------------------
 st.set_page_config(page_title="AI Micro-Decision Optimizer", page_icon="⚡", layout="wide")
-st.title("⚡ AI Micro-Decision Optimizer (Safe Cloud Version)")
-st.caption("Predict your energy based on small daily habits. Fully free and private.")
+st.title("⚡ AI Micro-Decision Optimizer — Stable Version")
+st.caption("Predict your energy based on daily habits. Free & private.")
 
 # Load data
 ensure_csv(DATA_PATH)
